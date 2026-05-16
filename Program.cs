@@ -7,7 +7,7 @@ class Program
         var processor = new WordProcessor();
         try
         {
-            processor.ProcessWords();
+            processor.ProcessWordsParallel();
         }
         catch (Exception ex)
         {
