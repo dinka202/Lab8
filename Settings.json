@@ -9,5 +9,9 @@
   ],
   "LastProcessedWordIndex": 0,
   "WordsFilePath": "words.txt",
-  "CsvDownloadPath": "downloads/"
+  "CsvDownloadPath": "downloads/",
+  "MemoryThresholdMB": 500,
+  "RapidGrowthTimeWindowSeconds": 30,
+  "RapidGrowthThresholdMB": 100,
+  "MaxInstances": 5
 }

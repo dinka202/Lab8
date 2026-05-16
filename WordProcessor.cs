@@ -22,6 +22,9 @@ public class WordProcessor
     private static int timeoutSeconds = 30;
     private static object fileLock = new object();
     private static Mutex mutex = new Mutex(false, "Global\\WordsFileLock");
+    private MemoryMonitor memoryMonitor;
+    private InstanceManager instanceManager;
+    private Timer memoryCheckTimer;
 
     public WordProcessor()
     {
@@ -29,6 +32,9 @@ public class WordProcessor
         existingWords = LoadExistingWords();
         InitializeEdgeDriver();
         wait = new WebDriverWait(driver, TimeSpan.FromSeconds(timeoutSeconds));
+        memoryMonitor = new MemoryMonitor(settings);
+        instanceManager = new InstanceManager(settings);
+        memoryCheckTimer = new Timer(CheckMemoryAndRestartIfNeeded, null, 10000, 10000);
     }
 
     private void InitializeEdgeDriver()
@@ -119,10 +125,10 @@ public class WordProcessor
 
         findButton.Click();
         LogStep("Кнопка «Найти» нажата");
-        LogStep("Ожидаем загрузки результатов поиска...");
+        LogStep("Ожидаем загрузки результатов поиска");
         WaitForPageLoad();
         LogStep("Результаты поиска загружены");
-        LogStep("Ожидаем появления кнопки скачивания CSV...");
+        LogStep("Ожидаем появления кнопки скачивания CSV");
         var downloadButton = wait.Until(
             d =>
             {
@@ -135,7 +141,7 @@ public class WordProcessor
         LogStep("Кнопка скачивания CSV нажата");
 
         Thread.Sleep(5000);
-        LogStep("Ожидание завершения скачивания (5 сек)");
+        LogStep("Ожидание завершения скачивания");
 
         ParseAndAddWordsFromCsv();
     }
@@ -221,7 +227,7 @@ public class WordProcessor
                 {
                     existingWords.Add(word);
                     File.AppendAllLines(settings.WordsFilePath, new[] { word });
-                    LogStep($"Добавлено новое слово (распределённо): {word}");
+                    LogStep($"Добавлено новое слово: {word}");
                 }
                 else
                 {
@@ -259,4 +265,28 @@ public class WordProcessor
     {
         Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {message}");
     }
+
+    private void CheckMemoryAndRestartIfNeeded(object state)
+    {
+        try
+        {
+            if (memoryMonitor.ShouldRestart())
+            {
+                Console.WriteLine("Обнаружены проблемы с памятью — перезапуск...");
+                instanceManager.RestartWithReducedInstances();
+                Environment.Exit(0);
+            }
+
+            if (instanceManager.IsExcessInstance())
+            {
+                Console.WriteLine("Текущий экземпляр признан излишним — завершаем работу");
+                Environment.Exit(0);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка при проверке памяти: {ex.Message}");
+        }
+    }
+
 }
