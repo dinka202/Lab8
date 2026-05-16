@@ -10,6 +10,8 @@ using System.Linq;
 using Newtonsoft.Json;
 using System.Threading;
 using System.Data;
+using System.Threading.Tasks;
+using System.Collections.Concurrent;
 
 public class WordProcessor
 {
@@ -18,6 +20,8 @@ public class WordProcessor
     private HashSet<string> existingWords;
     private WebDriverWait wait;
     private static int timeoutSeconds = 30;
+    private static object fileLock = new object();
+    private static Mutex mutex = new Mutex(false, "Global\\WordsFileLock");
 
     public WordProcessor()
     {
@@ -53,7 +57,7 @@ public class WordProcessor
         return words;
     }
 
-    public void ProcessWords()
+    public void ProcessWordsParallel()
     {
         try
         {
@@ -61,15 +65,20 @@ public class WordProcessor
             LogStep("Переход на сайт выполнен");
 
             var words = File.ReadLines(settings.WordsFilePath).ToList();
-            for (int i = settings.LastProcessedWordIndex; i < words.Count; i++)
-            {
-                var word = words[i].Trim();
-                if (string.IsNullOrWhiteSpace(word)) continue;
+            var tasks = new List<Task>();
 
-                ProcessSingleWord(word);
-                settings.LastProcessedWordIndex = i + 1;
-                SaveSettings();
+            foreach (var word in words)
+            {
+                var trimmedWord = word.Trim();
+                if (!string.IsNullOrWhiteSpace(trimmedWord))
+                {
+                    tasks.Add(Task.Run(() => ProcessSingleWord(trimmedWord)));
+                }
             }
+
+            Task.WaitAll(tasks.ToArray());
+            settings.LastProcessedWordIndex = words.Count;
+            SaveSettings();
         }
         finally
         {
@@ -82,13 +91,12 @@ public class WordProcessor
         Console.WriteLine($"Обработка слова: {word}");
         LogStep($"Начинаем обработку слова '{word}'");
 
-        // Шаг 1: Ввод слова в поисковое поле
         LogStep("Ожидаем появления поля ввода...");
         var searchInput = wait.Until(
             d =>
             {
                 var element = d.FindElement(By.Name("q"));
-            LogStep("Поле ввода найдено");
+                LogStep("Поле ввода найдено");
                 return element;
             }
         );
@@ -98,9 +106,9 @@ public class WordProcessor
         LogStep("Ожидаем появления кнопки «Найти»...");
 
         IWebElement findButton = wait.Until(
-        ExpectedConditions.ElementToBeClickable(
-        By.CssSelector("div.search-form-submit-index input[type='submit']")
-        )
+                ExpectedConditions.ElementToBeClickable(
+                By.CssSelector("div.search-form-submit-index input[type='submit']")
+            )
         );
         LogStep("Кнопка «Найти» найдена и готова к клику");
 
@@ -131,7 +139,6 @@ public class WordProcessor
 
         ParseAndAddWordsFromCsv();
     }
-
 
     private void ParseAndAddWordsFromCsv()
     {
@@ -182,7 +189,7 @@ public class WordProcessor
                         while (csv.Read())
                         {
                             var newWord = csv.GetField<string>(0).Trim().ToLower();
-                            AddWordIfNotExists(newWord);
+                            AddWordIfNotExistsDistributed(newWord);
                         }
                     }
                 }
@@ -202,12 +209,29 @@ public class WordProcessor
         }
     }
 
-    private void AddWordIfNotExists(string word)
+    private void AddWordIfNotExistsDistributed(string word)
     {
-        if (!existingWords.Contains(word))
+        mutex.WaitOne();
+        try
         {
-            existingWords.Add(word);
-            File.AppendAllLines(settings.WordsFilePath, new[] { word });
+            lock (fileLock)
+            {
+                existingWords = LoadExistingWords();
+                if (!existingWords.Contains(word))
+                {
+                    existingWords.Add(word);
+                    File.AppendAllLines(settings.WordsFilePath, new[] { word });
+                    LogStep($"Добавлено новое слово (распределённо): {word}");
+                }
+                else
+                {
+                    LogStep($"Слово уже существует: {word}");
+                }
+            }
+        }
+        finally
+        {
+            mutex.ReleaseMutex();
         }
     }
 
@@ -228,6 +252,7 @@ public class WordProcessor
     {
         var settingsJson = JsonConvert.SerializeObject(settings, Formatting.Indented);
         File.WriteAllText("Settings.json", settingsJson);
+        LogStep("Настройки сохранены");
     }
 
     private void LogStep(string message)
